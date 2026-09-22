@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Галерея изображений репозитория</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+  }
+  header {
+    padding: 24px;
+    text-align: center;
+    border-bottom: 1px solid #30363d;
+  }
+  header h1 { margin: 0 0 8px; font-size: 22px; }
+  header p { margin: 0; color: #8b949e; font-size: 14px; }
+  #status {
+    padding: 12px 24px;
+    font-size: 14px;
+    color: #8b949e;
+  }
+  #gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+    padding: 16px 24px 48px;
+  }
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: transform .15s ease, border-color .15s ease;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: #58a6ff;
+  }
+  .card img {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    display: block;
+    background: #21262d;
+  }
+  .card .meta {
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #8b949e;
+    word-break: break-all;
+  }
+  .card .meta a { color: #58a6ff; text-decoration: none; }
+  .card .meta a:hover { text-decoration: underline; }
+  .empty { padding: 40px 24px; text-align: center; color: #8b949e; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📸 Галерея изображений</h1>
+  <p>Автоматическая подгрузка из GitHub-репозитория</p>
+</header>
+
+<div id="status">Загрузка списка файлов…</div>
+<div id="gallery"></div>
+
+<script>
+/* =========================================================
+   НАСТРОЙКИ — ЗАМЕНИТЕ НА СВОИ ЗНАЧЕНИЯ
+   ========================================================= */
+const CONFIG = {
+  owner: "ВАШ_ЛОГИН",        // например: "torvalds"
+  repo:  "ВАШ_РЕПОЗИТОРИЙ",  // например: "my-photos"
+  branch: "main",            // ветка: main / master / gh-pages
+  path: ""                   // папка внутри репозитория, напр. "images"
+};
+/* ========================================================= */
+
+const IMG_RE = /\.(jpe?g|png|gif|webp|bmp|svg|avif)$/i;
+const apiUrl = `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${CONFIG.path}?ref=${CONFIG.branch}`;
+const rawBase = `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${CONFIG.path}`;
+const pageBase = `https://${CONFIG.owner}.github.io/${CONFIG.repo}/${CONFIG.path}`;
+
+const statusEl = document.getElementById("status");
+const galleryEl = document.getElementById("gallery");
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+async function loadGallery() {
+  try {
+    const res = await fetch(apiUrl, {
+      headers: { "Accept": "application/vnd.github+json" }
+    });
+
+    if (!res.ok) {
+      if (res.status === 404) {
+        throw new Error("Репозиторий, ветка или папка не найдены. Проверьте CONFIG.");
+      }
+      if (res.status === 403) {
+        throw new Error("Превышен лимит запросов к GitHub API (60/час без токена).");
+      }
+      throw new Error("Ошибка GitHub API: " + res.status);
+    }
+
+    const items = await res.json();
+
+    if (!Array.isArray(items)) {
+      throw new Error("Ожидался список файлов. Возможно, указан путь к одному файлу.");
+    }
+
+    const images = items.filter(
+      it => it.type === "file" && IMG_RE.test(it.name)
+    );
+
+    if (images.length === 0) {
+      statusEl.textContent = "В этой папке нет изображений.";
+      return;
+    }
+
+    statusEl.textContent = `Найдено изображений: ${images.length}`;
+
+    const frag = document.createDocumentFragment();
+
+    for (const file of images) {
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = file.name;
+      img.src = `${rawBase}/${encodeURIComponent(file.name)}`;
+      img.onerror = () => { img.style.opacity = 0.3; };
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.innerHTML =
+        `<a href="${rawBase}/${encodeURIComponent(file.name)}" target="_blank" rel="noopener">` +
+        `${escapeHtml(file.name)}</a><br>` +
+        `<span>${(file.size / 1024).toFixed(1)} КБ</span>`;
+
+      card.appendChild(img);
+      card.appendChild(meta);
+      frag.appendChild(card);
+    }
+
+    galleryEl.appendChild(frag);
+
+    // Машиночитаемый список прямых ссылок — для нейросетей и парсеров
+    const manifest = document.createElement("script");
+    manifest.type = "application/json";
+    manifest.id = "image-manifest";
+    manifest.textContent = JSON.stringify(
+      images.map(f => ({
+        name: f.name,
+        raw: `${rawBase}/${encodeURIComponent(f.name)}`,
+        page: `${pageBase}/${encodeURIComponent(f.name)}`,
+        size: f.size
+      })),
+      null, 2
+    );
+    document.body.appendChild(manifest);
+
+  } catch (err) {
+    statusEl.innerHTML = "⚠️ " + escapeHtml(err.message);
+    console.error(err);
+  }
+}
+
+loadGallery();
+</script>
+
+</body>
+</html>
